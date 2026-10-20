@@ -22,6 +22,7 @@ from psdesk.columns import (
     OPP_AGE,
     OPP_AGREEMENT,
     OPP_AMOUNT,
+    OPP_BOAT,
     OPP_CLOSE,
     OPP_COMMIT,
     OPP_FISCAL,
@@ -38,6 +39,7 @@ from psdesk.columns import (
     OPP_STAGE,
     OPP_STATUS,
     OPP_STATUS_DATE,
+    OPP_TERRITORY,
     OPP_WEIGHTED,
     QUOTE_ACCOUNT,
     QUOTE_CLOSE,
@@ -114,6 +116,7 @@ class ServiceOpportunity:
     primary_quote: str
     currency: str
     agreement_type: str
+    territory: str
     lines: list[QuoteLine] = field(default_factory=list)
     duplicate_id: bool = False
 
@@ -137,7 +140,14 @@ class ServiceOpportunity:
 
     @property
     def boat(self) -> str:
+        own = boat_label(self.territory)
+        if own != UNASSIGNED:
+            return own
         return _boat_of(self.lines)
+
+    @property
+    def band(self) -> str:
+        return stage_band(self.stage)
 
 
 @dataclass
@@ -323,6 +333,14 @@ def boat_label(territory: str) -> str:
     return _BOAT_NAMES.get(suffix.upper(), suffix)
 
 
+def stage_band(stage: str) -> str:
+    """Stage 80 and above is forecast. Anything lower is pipeline."""
+    match = re.match(r"\s*(\d+)", stage or "")
+    if match and int(match.group(1)) >= 80:
+        return "forecast"
+    return "pipeline"
+
+
 def fiscal_label(value: str) -> str:
     """Q4-2027 and FY2027 Q4 are the same period."""
     text = value.strip()
@@ -389,6 +407,7 @@ def _service_opp(row: dict[str, object]) -> ServiceOpportunity:
         primary_quote=_text(row.get(OPP_PRIMARY)),
         currency=_text(row.get(OPP_SERVICES_CURRENCY)),
         agreement_type=_text(row.get(OPP_AGREEMENT)),
+        territory=_text(row.get(OPP_TERRITORY)) or _text(row.get(OPP_BOAT)),
     )
 
 

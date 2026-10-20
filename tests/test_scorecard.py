@@ -158,6 +158,34 @@ def test_duplicate_opportunity_ids_are_marked(tmp_path):
     assert all(row.duplicate_id for row in card.services)
 
 
+def test_closing_territory_sets_the_boat_and_stage_sets_the_band(tmp_path):
+    from psdesk.scorecard import stage_band
+
+    assert stage_band("80-Contracts/Negotiation") == "forecast"
+    assert stage_band("100-Closed Won") == "forecast"
+    assert stage_band("70-Vendor of Choice") == "pipeline"
+    assert stage_band("20-Accepted Opportunity") == "pipeline"
+    assert stage_band("") == "pipeline"
+
+    opps = tmp_path / "closing.csv"
+    quotes = tmp_path / "quotes.csv"
+    _write_csv(opps, _opp_header() + ["Territory"], [
+        _opp("Alpha", "Alpha-Own", 10, opp_id="006FAKE0000000A1", primary="") + ["APJ-KR"],
+        _opp("Beta", "Beta-Quote", 20, opp_id="006FAKE0000000B1", primary="Q-1") + [""],
+        _opp("Gamma", "Gamma-Wins", 30, opp_id="006FAKE0000000C1", primary="Q-2") + ["Japan"],
+    ])
+    _write_csv(quotes, _quote_header(), [
+        _quote("Services", "Beta", "Beta-Quote", "QL-1", "PS-A", 20, "APJ-ANZ", opp_id="006FAKE0000000B1"),
+        _quote("Services", "Gamma", "Gamma-Wins", "QL-2", "PS-B", 30, "APJ-ANZ", opp_id="006FAKE0000000C1"),
+    ])
+    card = build_scorecard(load_table(opps), load_table(quotes))
+    by_name = {row.name: row for row in card.services}
+    assert by_name["Alpha-Own"].boat == "Korea"
+    assert by_name["Alpha-Own"].band == "pipeline"
+    assert by_name["Beta-Quote"].boat == "ANZ"
+    assert by_name["Gamma-Wins"].boat == "Japan"
+
+
 def test_csv_percents_and_fiscal_labels():
     from psdesk.scorecard import _probability, fiscal_label
 
@@ -239,6 +267,7 @@ def test_close_pressure_and_status_cadence():
     assert service["statusBand"] == "weekly"
     assert service["statusAge"] == 6
     assert service["statusFresh"] is True
+    assert service["band"] == "forecast"
     assert payload["asOfIso"] == "2026-10-20"
 
 

@@ -42,6 +42,7 @@ def render(scorecard: Scorecard, opps: Table, quotes: Table, as_of: date | None)
 <div class="books" id="books"></div>
 <div class="boats" id="boats"></div>
 <div class="filters" id="filters"></div>
+<div id="summary"></div>
 <div class="stats" id="stats"></div>
 <div class="charts">
 <div id="chart-boat"></div>
@@ -76,12 +77,17 @@ def _lead(scorecard: Scorecard, payload: dict) -> str:
     due = sum(1 for row in services if row["closeTiming"] == "due")
     soon = sum(1 for row in services if row["closeTiming"] == "soon")
     stale = sum(1 for row in services if row["statusFresh"] is False)
+    forecast = [row for row in services if row["band"] == "forecast"]
+    pipeline = [row for row in services if row["band"] == "pipeline"]
     periods = len(scorecard.fiscal_periods)
     period_bit = f" Across {periods} fiscal {'period' if periods == 1 else 'periods'}." if periods else ""
     return (
         f"{count} services {noun} in the closing export, "
         f"{_money(scorecard.services_value)} services value "
         f"and {_money(scorecard.weighted)} weighted. "
+        f"Forecast, stage 80 and above, is {_money(sum(row['servicesValue'] or 0 for row in forecast))} "
+        f"across {len(forecast)}. "
+        f"Pipeline is {_money(sum(row['servicesValue'] or 0 for row in pipeline))} across {len(pipeline)}. "
         f"{missing} {missing_verb} no primary quote. "
         f"{unlisted} {unlisted_verb} a primary quote with no lines in the quote-line export. "
         f"{due} close today or earlier. "
@@ -114,8 +120,16 @@ def _extra_notes(scorecard: Scorecard) -> str:
         "Close dates use the report date. A close on that date or earlier is due. "
         f"A close in the next {SOON_DAYS} days is coming up. "
         "On this services book, status is weekly above 100,000, fortnightly above 50,000 through 100,000, "
-        "and monthly from 0 through 50,000. A missing status date counts as overdue."
+        "and monthly from 0 through 50,000. A missing status date counts as overdue.",
+        "Stage 80 and above is forecast. A lower stage is pipeline.",
+        "Boat on a services opportunity comes from the closing file's Territory column, or a Boat column if that is the header. "
+        "APJ-ANZ displays as ANZ. A blank cell falls back to the quote-line territory.",
     ]
+    outside = len(scorecard.outside_quarter)
+    if outside == 1:
+        notes.append("1 services quote is not in the closing file, so it is left off this page.")
+    elif outside:
+        notes.append(f"{outside} services quotes are not in the closing file, so they are left off this page.")
     if scorecard.commit_column:
         if scorecard.commit_values:
             listed = ", ".join(scorecard.commit_values)

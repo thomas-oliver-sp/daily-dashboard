@@ -42,6 +42,7 @@ def _service(row: ServiceOpportunity, as_of: date) -> dict:
         "owner": row.owner,
         "boat": row.boat,
         "stage": row.stage,
+        "band": row.band,
         "fiscal": row.fiscal_period,
         "close": _close(row.close, row.close_raw),
         "closeIso": row.close.isoformat() if row.close else "",

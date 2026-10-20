@@ -26,6 +26,8 @@ OPP_ID = "Opportunity ID"
 OPP_PRIMARY = "Primary Quote"
 OPP_AGREEMENT = "Agreement Type"
 OPP_OWNER = "Opportunity Owner"
+OPP_TERRITORY = "Territory"
+OPP_BOAT = "Boat"
 
 QUOTE_RECORD_TYPE = "Opportunity Record Type"
 QUOTE_ACCOUNT = "Account Name"
