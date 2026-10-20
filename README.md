@@ -30,6 +30,8 @@ python -m psdesk build --opps closing.xlsx --quotes quote-lines.xlsx -o dist/ind
 
 `python -m psdesk serve path/to/exports` serves that page at `http://127.0.0.1:8765/index.html`.
 
+The page is a local dashboard. Switch between the services book, license and renewal quotes, and services quotes that are not in the closing file. Filter by boat, fiscal period, stage, and quote coverage, or search account, quote, and product. Click a bar or a coverage count to cut the table. Click a row to see its quote lines. The address bar keeps the current cut, so a link reopens the same view. The page does not call out to a network.
+
 `fixtures/` holds the sanitized 20 Oct 2026 sample. `python -m pytest` checks the flags against it.
 
 Money is the converted amount already on the report. The old commit column is shown only when it has values; in the sample it is blank, so there is no commit / upside split yet.

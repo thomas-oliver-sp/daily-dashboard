@@ -179,6 +179,12 @@ def test_unknown_record_type_is_kept(tmp_path):
     assert card.other[0].record_type == "Partner"
     assert card.other[0].boat == "India"
     assert card.shadow == []
+    from psdesk.payload import to_payload
+
+    payload = to_payload(card, load_table(opps), load_table(quotes), None)
+    assert payload["other"][0]["recordType"] == "Partner"
+    assert payload["other"][0]["boat"] == "India"
+    assert payload["shadow"] == []
 
 
 def test_missing_column_names_the_file(tmp_path):
@@ -202,18 +208,33 @@ def test_page_escapes_status_notes_and_shows_the_sample_flag(tmp_path):
     card.services[0].status_note = "<script>alert(1)</script>"
     page = render(card, opps, quotes, date(2026, 10, 20))
     assert "<script>alert" not in page
-    assert "&lt;script&gt;" in page
+    assert r"\u003cscript>alert(1)\u003c/script>" in page
+    assert 'id="ps-data"' in page
     assert "SomeUni-Apps" in page
     assert "Bank-ISC New" in page
     assert "Company-Renewal" in page
     assert "Something-PS Phase 1" in page
     assert "No primary quote" in page
+    payload = _page_payload(page)
+    assert payload["services"][0]["coverage"] == "missing"
+    assert payload["services"][0]["statusNote"] == "<script>alert(1)</script>"
+    assert any(row["name"] == "Company-Renewal" for row in payload["shadow"])
+    assert any(row["name"] == "Something-PS Phase 1" for row in payload["outside"])
     out = tmp_path / "index.html"
     assert main(["build", str(FIXTURES), "-o", str(out), "--as-of", "2026-10-20"]) == 0
     written = out.read_text(encoding="utf-8")
     assert "20 Oct 2026" in written
     assert "1 opportunity." in written
-    assert "1,105,018.11" in written
+    assert "1,105,018.11" in written or "1105018.1059068" in written
+
+
+def _page_payload(page: str) -> dict:
+    import json
+    import re
+
+    match = re.search(r'<script id="ps-data" type="application/json">(.*?)</script>', page, re.S)
+    assert match
+    return json.loads(match.group(1))
 
 
 def _opp_header():
