@@ -6,21 +6,24 @@ import pytest
 
 from psdesk.columns import (
     OPP_ACCOUNT,
-    OPP_AMOUNT,
     OPP_CLOSE,
     OPP_FISCAL,
+    OPP_ID,
     OPP_NAME,
     OPP_OWNER,
+    OPP_PRIMARY,
     OPP_PROBABILITY,
     OPP_SERVICES_VALUE,
     OPP_STAGE,
     OPP_WEIGHTED,
     QUOTE_ACCOUNT,
     QUOTE_CLOSE,
+    QUOTE_FISCAL,
     QUOTE_LINE,
     QUOTE_NAME,
     QUOTE_NET,
     QUOTE_NUMBER,
+    QUOTE_OPP_ID,
     QUOTE_OWNER,
     QUOTE_PRODUCT,
     QUOTE_RECORD_TYPE,
@@ -52,7 +55,10 @@ def test_sample_flags_the_services_opp_with_no_quote():
     assert opp.weighted == pytest.approx(146792.412)
     assert opp.probability == pytest.approx(0.9)
     assert opp.close == date(2026, 10, 30)
-    assert opp.fiscal_period == "Q3-2027"
+    assert opp.fiscal_period == "FY2027 Q3"
+    assert opp.primary_quote == ""
+    assert opp.unlisted_quote is False
+    assert card.currency == "USD"
     assert opp.renewal == "No"
     assert card.missing_quotes == 1
     assert card.commit_values == []
@@ -75,7 +81,7 @@ def test_sample_separates_license_ps_from_services_quotes():
     assert license_deal.boat == "ASEAN"
     assert license_deal.net_total == pytest.approx(8000)
     assert license_deal.in_services_book is False
-    assert license_deal.quotes == ["Q-152366"]
+    assert license_deal.quotes == ["Q-000001"]
 
     renewal = shadow[("Renewal", "Company-Renewal")]
     assert renewal.boat == "ANZ"
@@ -118,19 +124,48 @@ def test_multiple_services_lines_sum_onto_one_opportunity(tmp_path):
     assert card.outside_quarter == []
 
 
-def test_duplicate_opportunity_names_are_marked(tmp_path):
+def test_same_name_does_not_join_and_ids_do(tmp_path):
     opps = tmp_path / "closing.csv"
     quotes = tmp_path / "quotes.csv"
     _write_csv(opps, _opp_header(), [
-        _opp("One", "Same-Name", 10),
-        _opp("Two", "Same-Name", 20),
+        _opp("Customer1", "Opp1", 10, opp_id="006AAA000000001", primary=""),
+        _opp("Customer9", "Opp1", 20, opp_id="006AAA000000002", primary="Q-9"),
     ])
     _write_csv(quotes, _quote_header(), [
-        _quote("Services", "One", "Same-Name", "QL-1", "PS-A", 10, "APJ-Korea"),
+        _quote("Services", "OtherName", "Different", "QL-1", "PS-A", 10, "APJ-KR", opp_id="006AAA000000001"),
     ])
     card = build_scorecard(load_table(opps), load_table(quotes))
-    assert all(row.duplicate_name for row in card.services)
-    assert all(row.quote_total == pytest.approx(10) for row in card.services)
+    linked = next(row for row in card.services if row.opportunity_id == "006AAA000000001")
+    other = next(row for row in card.services if row.opportunity_id == "006AAA000000002")
+    assert linked.quote_total == pytest.approx(10)
+    assert linked.boat == "Korea"
+    assert linked.missing_quote is False
+    assert other.unlisted_quote is True
+    assert other.lines == []
+    assert card.outside_quarter == []
+
+
+def test_duplicate_opportunity_ids_are_marked(tmp_path):
+    opps = tmp_path / "closing.csv"
+    quotes = tmp_path / "quotes.csv"
+    _write_csv(opps, _opp_header(), [
+        _opp("One", "First", 10, opp_id="006SAME00000001"),
+        _opp("Two", "Second", 20, opp_id="006SAME00000001"),
+    ])
+    _write_csv(quotes, _quote_header(), [])
+    card = build_scorecard(load_table(opps), load_table(quotes))
+    assert all(row.duplicate_id for row in card.services)
+
+
+def test_csv_percents_and_fiscal_labels():
+    from psdesk.scorecard import _probability, fiscal_label
+
+    assert _probability("1") == pytest.approx(0.01)
+    assert _probability("20") == pytest.approx(0.20)
+    assert _probability("33.333") == pytest.approx(0.33333)
+    assert _probability(0.9) == pytest.approx(0.9)
+    assert fiscal_label("Q4-2027") == "FY2027 Q4"
+    assert fiscal_label("FY2027 Q3") == "FY2027 Q3"
 
 
 def test_unknown_record_type_is_kept(tmp_path):
@@ -172,7 +207,7 @@ def test_page_escapes_status_notes_and_shows_the_sample_flag(tmp_path):
     assert "Bank-ISC New" in page
     assert "Company-Renewal" in page
     assert "Something-PS Phase 1" in page
-    assert "No quote yet" in page
+    assert "No primary quote" in page
     out = tmp_path / "index.html"
     assert main(["build", str(FIXTURES), "-o", str(out), "--as-of", "2026-10-20"]) == 0
     written = out.read_text(encoding="utf-8")
@@ -183,8 +218,8 @@ def test_page_escapes_status_notes_and_shows_the_sample_flag(tmp_path):
 
 def _opp_header():
     return [
-        OPP_ACCOUNT, OPP_NAME, OPP_AMOUNT, OPP_SERVICES_VALUE, OPP_WEIGHTED,
-        OPP_PROBABILITY, OPP_STAGE, OPP_FISCAL, OPP_CLOSE, OPP_OWNER,
+        OPP_ACCOUNT, OPP_NAME, OPP_SERVICES_VALUE, OPP_WEIGHTED, OPP_PROBABILITY,
+        OPP_STAGE, OPP_FISCAL, OPP_CLOSE, OPP_ID, OPP_PRIMARY, OPP_OWNER,
     ]
 
 
@@ -192,17 +227,18 @@ def _quote_header():
     return [
         QUOTE_RECORD_TYPE, QUOTE_ACCOUNT, QUOTE_NAME, QUOTE_OWNER, QUOTE_NUMBER,
         QUOTE_LINE, QUOTE_PRODUCT, QUOTE_NET, QUOTE_STAGE, QUOTE_CLOSE, QUOTE_TERRITORY,
+        QUOTE_OPP_ID, QUOTE_FISCAL,
     ]
 
 
-def _opp(account, name, amount, services=None, weighted=None):
+def _opp(account, name, amount, services=None, weighted=None, opp_id="006FAKE000000099", primary="Q-1"):
     services = amount if services is None else services
     weighted = services if weighted is None else weighted
-    return [account, name, amount, services, weighted, 0.5, "60-Proposal", "Q3-2027", "10/30/2026", "Owner"]
+    return [account, name, services, weighted, "50", "60-Proposal", "Q3-2027", "10/30/2026", opp_id, primary, "Owner"]
 
 
-def _quote(record_type, account, name, line, product, net, territory):
-    return [record_type, account, name, "Owner", "Q-1", line, product, net, "60-Proposal", "11/1/2026", territory]
+def _quote(record_type, account, name, line, product, net, territory, opp_id="006FAKE000000099"):
+    return [record_type, account, name, "Owner", "Q-1", line, product, net, "60-Proposal", "11/1/2026", territory, opp_id, "FY2027 Q3"]
 
 
 def _write(path: Path, headers, rows):

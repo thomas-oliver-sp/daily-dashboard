@@ -136,27 +136,33 @@ footer {{ margin-top: 36px; color: var(--muted); font-size: 13px; max-width: 78c
 <p class="lead">{esc(_lead(scorecard))}</p>
 <p class="sources">{_sources(opps, quotes, title_date)}</p>
 {_stats(scorecard)}
+<h2>By fiscal period</h2>
+<p class="note">Taken from the closing export. Q4-2027 and FY2027 Q4 are shown as the same period.</p>
+{_fiscals(scorecard)}
 <h2>By boat</h2>
-<p class="note">Boat is the quote-line Territory, with the APJ- prefix removed. The closing export has no territory column, so a services opportunity with no quote lines stays Unassigned.</p>
+<p class="note">Boat is the quote-line Territory. The closing export has no territory column, so a services opportunity with no quote lines stays Unassigned.</p>
 {_sheet_warning(quotes, scorecard)}
 {_boats(scorecard)}
-<h2>No quote yet</h2>
-<p class="note">A services opportunity in the closing export with no Services rows in the quote-line export. That is the missing primary quote.</p>
+<h2>No primary quote</h2>
+<p class="note">Primary Quote is blank on the services opportunity, and the quote-line export has no Services lines for its opportunity id.</p>
 {_missing(scorecard)}
+<h2>Primary quote with no lines in this export</h2>
+<p class="note">Primary Quote is filled in, and that quote number does not appear on any line in the quote-line export. The quote exists. This file has no PS lines for it.</p>
+{_unlisted(scorecard)}
 <h2>PS on a license or renewal quote</h2>
 <p class="note">Direct License and Renewal are sales quotes that carry a PS product. They are not expected to have a services opportunity. Several lines on one opportunity are kept together.</p>
 {_groups(scorecard.shadow, shadow=True)}
-<h2>Services opportunities closing in this export</h2>
-<p class="note">Joined to Services quote lines on Opportunity Name. Line amounts are summed.</p>
+<h2>Services opportunities in this export</h2>
+<p class="note">Joined to Services quote lines on Opportunity ID. Line amounts are summed. Names are not used to match.</p>
 {_services(scorecard)}
 <h2>Services quotes outside this closing export</h2>
 <p class="note">Services quote lines whose opportunity is not in the closing file. The quote export is open lines, so these are often later periods rather than errors.</p>
 {_groups(scorecard.outside_quarter, shadow=False)}
 {_other(scorecard)}
 <footer>
-<p>Join key is Opportunity Name. These two exports do not include an opportunity id, so two opportunities with the same name would share quote lines.</p>
-<p>Money uses the converted columns already on the reports. Nothing is revalued. {(esc(CONVERTED))}.</p>
-<p>{_commit_note(scorecard)}</p>
+<p>Joined on Opportunity ID. Account and opportunity names are shown from the file they came from and are not used to match rows.</p>
+<p>Money uses the converted columns already on the reports. Nothing is revalued. {esc(_money_note(scorecard))}.</p>
+{_extra_notes(scorecard)}
 </footer>
 </div>
 </body>
@@ -169,23 +175,27 @@ def _lead(scorecard: Scorecard) -> str:
     noun = "opportunity" if count == 1 else "opportunities"
     missing = scorecard.missing_quotes
     missing_verb = "has" if missing == 1 else "have"
-    periods = ", ".join(scorecard.fiscal_periods)
-    period_bit = f" Fiscal period {periods}." if periods else ""
+    unlisted = scorecard.unlisted_quotes
+    unlisted_verb = "has" if unlisted == 1 else "have"
+    periods = len(scorecard.fiscal_periods)
+    period_bit = f" Across {periods} fiscal {'period' if periods == 1 else 'periods'}." if periods else ""
     return (
         f"{count} services {noun} in the closing export, "
         f"{_money(scorecard.services_value)} services value "
         f"and {_money(scorecard.weighted)} weighted. "
-        f"{missing} {missing_verb} no quote lines. "
+        f"{missing} {missing_verb} no primary quote. "
+        f"{unlisted} {unlisted_verb} a primary quote with no lines in the quote-line export. "
         f"License and renewal quotes carry {_money(scorecard.shadow_value)} of PS.{period_bit}"
     )
 
 
 def _stats(scorecard: Scorecard) -> str:
+    unit = f", {scorecard.currency}" if scorecard.currency else ""
     cards = [
-        (_money(scorecard.services_value), "Services value in the closing export", ""),
-        (_money(scorecard.weighted), "Weighted revenue, as exported", ""),
-        (str(scorecard.missing_quotes), "Services opportunities with no quote", "flag" if scorecard.missing_quotes else ""),
-        (_money(scorecard.shadow_value), "PS on license and renewal quotes", "watch" if scorecard.shadow_value else ""),
+        (_money(scorecard.services_value), f"Services value in the closing export{unit}", ""),
+        (_money(scorecard.weighted), f"Weighted revenue, as exported{unit}", ""),
+        (str(scorecard.missing_quotes), "No primary quote", "flag" if scorecard.missing_quotes else ""),
+        (_money(scorecard.shadow_value), f"PS on license and renewal quotes{unit}", "watch" if scorecard.shadow_value else ""),
     ]
     body = "".join(
         f'<div class="stat {kind}"><b>{esc(value)}</b><span>{esc(label)}</span></div>'
@@ -205,6 +215,7 @@ def _boats(scorecard: Scorecard) -> str:
             f'<td class="num">{esc(_money_or_blank(boat.services_value))}</td>'
             f'<td class="num">{boat.opportunities}</td>'
             f'<td class="num">{boat.missing_quotes}</td>'
+            f'<td class="num">{boat.unlisted_quotes}</td>'
             f'<td class="num">{esc(_money_or_blank(boat.shadow_value))}</td>'
             f'<td class="num">{esc(_money_or_blank(boat.outside_value))}</td>'
             "</tr>"
@@ -214,19 +225,20 @@ def _boats(scorecard: Scorecard) -> str:
             "Boat",
             "Closing services value",
             "Opportunities",
-            "No quote",
+            "No primary quote",
+            "Quote not in export",
             "PS on license or renewal",
             "Services quotes outside this file",
         ],
         rows,
-        numeric={1, 2, 3, 4, 5},
+        numeric={1, 2, 3, 4, 5, 6},
     )
 
 
 def _missing(scorecard: Scorecard) -> str:
     rows = [row for row in scorecard.services if row.missing_quote]
     if not rows:
-        return '<p class="empty">Every services opportunity in this export has at least one quote line.</p>'
+        return '<p class="empty">Every services opportunity in this export has a primary quote or quote lines.</p>'
     body = []
     for row in rows:
         body.append(
@@ -240,23 +252,60 @@ def _missing(scorecard: Scorecard) -> str:
             f'<td class="num">{esc(_pct(row.probability))}</td>'
             f"<td>{esc(row.owner)}</td>"
             f'<td class="prose">{esc(row.status_note)}</td>'
+            f"<td>{esc(row.opportunity_id)}</td>"
             "</tr>"
         )
     return _table(
-        ["Account", "Opportunity", "Stage", "Close", "Fiscal period", "Services value", "Probability", "Owner", "Status note"],
+        ["Account", "Opportunity", "Stage", "Close", "Fiscal period", "Services value", "Probability", "Owner", "Status note", "Opportunity ID"],
         body,
         numeric={5, 6},
+    )
+
+
+def _unlisted(scorecard: Scorecard) -> str:
+    rows = [row for row in scorecard.services if row.unlisted_quote]
+    if not rows:
+        return '<p class="empty">Every primary quote on the closing export has lines in the quote-line export, or no primary quote is set.</p>'
+    body = []
+    for row in rows:
+        body.append(
+            '<tr class="watch">'
+            f"<td>{esc(row.account)}</td>"
+            f"<td>{esc(row.name)}</td>"
+            f"<td>{esc(row.primary_quote)}</td>"
+            f"<td>{esc(row.stage)}</td>"
+            f'<td class="when">{esc(_date(row))}</td>'
+            f"<td>{esc(row.fiscal_period)}</td>"
+            f'<td class="num">{esc(_money(row.services_value))}</td>'
+            f"<td>{esc(row.owner)}</td>"
+            f"<td>{esc(row.opportunity_id)}</td>"
+            "</tr>"
+        )
+    return _table(
+        ["Account", "Opportunity", "Primary quote", "Stage", "Close", "Fiscal period", "Services value", "Owner", "Opportunity ID"],
+        body,
+        numeric={6},
     )
 
 
 def _services(scorecard: Scorecard) -> str:
     if not scorecard.services:
         return '<p class="empty">The closing export has no opportunity rows.</p>'
+    show_amount = any(row.amount is not None for row in scorecard.services)
     body = []
     for row in scorecard.services:
-        klass = ' class="flag"' if row.missing_quote else ""
-        quote_cell = "None" if row.missing_quote else _line_summary(row.lines, row.quote_total)
-        dup = "<div class='tag flag'>Name is not unique</div>" if row.duplicate_name else ""
+        if row.missing_quote:
+            klass = ' class="flag"'
+            quote_cell = "No primary quote"
+        elif row.unlisted_quote:
+            klass = ' class="watch"'
+            quote_cell = f"{esc(row.primary_quote)}<div class='tag watch'>No lines in the quote export</div>"
+        else:
+            klass = ""
+            mismatch = "<div class='tag watch'>Quote number differs from the lines</div>" if row.quote_mismatch else ""
+            quote_cell = f"{esc(row.primary_quote)}{mismatch}{_line_summary(row.lines, row.quote_total)}"
+        dup = "<div class='tag flag'>Opportunity ID is not unique</div>" if row.duplicate_id else ""
+        amount = f'<td class="num">{esc(_money(row.amount))}</td>' if show_amount else ""
         body.append(
             f"<tr{klass}>"
             f"<td>{esc(row.account)}</td>"
@@ -265,17 +314,45 @@ def _services(scorecard: Scorecard) -> str:
             f"<td>{esc(row.stage)}</td>"
             f'<td class="when">{esc(_date(row))}</td>'
             f"<td>{esc(row.fiscal_period)}</td>"
-            f'<td class="num">{esc(_money(row.amount))}</td>'
+            f"{amount}"
             f'<td class="num">{esc(_money(row.services_value))}</td>'
             f'<td class="num">{esc(_money(row.weighted))}</td>'
             f"<td>{quote_cell}</td>"
             f"<td>{esc(row.owner)}</td>"
             "</tr>"
         )
+    headers = ["Account", "Opportunity", "Boat", "Stage", "Close", "Fiscal period"]
+    numeric = set()
+    if show_amount:
+        headers.append("Amount")
+        numeric.add(len(headers) - 1)
+    headers.extend(["Services value", "Weighted", "Quote lines", "Owner"])
+    numeric.add(len(headers) - 4)
+    numeric.add(len(headers) - 3)
+    return _table(headers, body, numeric)
+
+
+def _fiscals(scorecard: Scorecard) -> str:
+    periods = scorecard.fiscal_periods
+    if not periods:
+        return '<p class="empty">The closing export has no fiscal period.</p>'
+    body = []
+    for period in periods:
+        rows = [row for row in scorecard.services if row.fiscal_period == period]
+        body.append(
+            "<tr>"
+            f"<td>{esc(period)}</td>"
+            f'<td class="num">{len(rows)}</td>'
+            f'<td class="num">{esc(_money(sum(row.services_value or 0 for row in rows)))}</td>'
+            f'<td class="num">{esc(_money(sum(row.weighted or 0 for row in rows)))}</td>'
+            f'<td class="num">{sum(1 for row in rows if row.missing_quote)}</td>'
+            f'<td class="num">{sum(1 for row in rows if row.unlisted_quote)}</td>'
+            "</tr>"
+        )
     return _table(
-        ["Account", "Opportunity", "Boat", "Stage", "Close", "Fiscal period", "Amount", "Services value", "Weighted", "Quote lines", "Owner"],
+        ["Fiscal period", "Opportunities", "Services value", "Weighted", "No primary quote", "Quote not in export"],
         body,
-        numeric={6, 7, 8},
+        numeric={1, 2, 3, 4, 5},
     )
 
 
@@ -393,11 +470,23 @@ def _sheet_warning(quotes: Table, scorecard: Scorecard) -> str:
     )
 
 
-def _commit_note(scorecard: Scorecard) -> str:
-    if scorecard.commit_values:
-        listed = ", ".join(scorecard.commit_values)
-        return f"The old commit column has values: {listed}. It is not used as the forecast split."
-    return "The column “(old) Commit?” is blank on every closing row, so this export cannot split commit and upside."
+def _money_note(scorecard: Scorecard) -> str:
+    if scorecard.currency:
+        return f"Currency on these exports is {scorecard.currency}."
+    return CONVERTED
+
+
+def _extra_notes(scorecard: Scorecard) -> str:
+    notes = []
+    if scorecard.commit_column:
+        if scorecard.commit_values:
+            listed = ", ".join(scorecard.commit_values)
+            notes.append(f"The old commit column has values: {listed}. It is not used as the forecast split.")
+        else:
+            notes.append("The column “(old) Commit?” is blank on every closing row, so this export cannot split commit and upside.")
+    if len(scorecard.agreement_types) == 1:
+        notes.append(f"Agreement type on every closing row is {scorecard.agreement_types[0]}.")
+    return "".join(f"<p>{esc(note)}</p>" for note in notes)
 
 
 def _date(row: ServiceOpportunity) -> str:

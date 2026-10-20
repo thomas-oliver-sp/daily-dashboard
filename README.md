@@ -8,9 +8,10 @@ Local opportunity scorecard. It reads two Salesforce tabular exports and opens a
 
 **PS quote lines** has three opportunity record types:
 
-- `Services` — quote lines for a services opportunity. Join on `Opportunity Name`. Several lines on one opportunity stay together.
+- `Services` — quote lines for a services opportunity. Join on `Opportunity ID`. Several lines on one opportunity stay together. Names are not used to match.
 - `Direct License` and `Renewal` — a sales quote that carries a PS product, usually with no services opportunity.
-- A services opportunity with no `Services` quote lines is flagged: no primary quote yet.
+- A blank `Primary Quote` on a services opportunity is flagged: no primary quote yet.
+- A `Primary Quote` with no lines in the quote-line export is listed separately. The quote exists, and this file has no PS lines for it.
 
 Boat comes from the quote-line `Territory` (`APJ-ANZ` displays as ANZ). The closing export has no territory column, so an opportunity with no quote lines is Unassigned.
 

@@ -1,30 +1,38 @@
 """Turn the two exports into the opportunity position.
 
 Services opportunities come from the closing report. Quote lines join to them
-on Opportunity Name. These exports do not include an opportunity id.
+on Opportunity ID. Names are display-only, because a sanitized extract can
+obscure the same deal differently in each file.
 
-A services opportunity with no Services quote lines has no primary quote yet.
-Direct License and Renewal lines are PS sold on a license quote. Several lines
-on one opportunity are one deal, not duplicates.
+A services opportunity with a blank Primary Quote has no primary quote yet.
+One whose Primary Quote is set, but which has no Services lines in the
+quote-line export, has a quote the line report does not contain.
+Direct License and Renewal lines are PS sold on a license quote. Several
+lines on one opportunity id are one deal.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from psdesk.columns import (
     OPP_ACCOUNT,
     OPP_AGE,
+    OPP_AGREEMENT,
     OPP_AMOUNT,
     OPP_CLOSE,
     OPP_COMMIT,
     OPP_FISCAL,
+    OPP_ID,
     OPP_NAME,
     OPP_OWNER,
+    OPP_PRIMARY,
     OPP_PROBABILITY,
     OPP_RECURRING,
     OPP_RENEWAL,
+    OPP_SERVICES_CURRENCY,
     OPP_SERVICES_TYPE,
     OPP_SERVICES_VALUE,
     OPP_STAGE,
@@ -35,10 +43,13 @@ from psdesk.columns import (
     QUOTE_CLOSE,
     QUOTE_DISCOUNT,
     QUOTE_FAMILY,
+    QUOTE_FISCAL,
     QUOTE_LINE,
     QUOTE_NAME,
     QUOTE_NET,
+    QUOTE_NET_CURRENCY,
     QUOTE_NUMBER,
+    QUOTE_OPP_ID,
     QUOTE_OPP_STATUS,
     QUOTE_OWNER,
     QUOTE_PRODUCT,
@@ -74,6 +85,9 @@ class QuoteLine:
     territory: str
     services_territory: str
     opportunity_status: str
+    opportunity_id: str
+    currency: str
+    fiscal_period: str
 
 
 @dataclass
@@ -96,12 +110,26 @@ class ServiceOpportunity:
     commit: str
     recurring: str
     renewal: str
+    opportunity_id: str
+    primary_quote: str
+    currency: str
+    agreement_type: str
     lines: list[QuoteLine] = field(default_factory=list)
-    duplicate_name: bool = False
+    duplicate_id: bool = False
 
     @property
     def missing_quote(self) -> bool:
-        return not self.lines
+        return not self.primary_quote and not self.lines
+
+    @property
+    def unlisted_quote(self) -> bool:
+        return bool(self.primary_quote) and not self.lines
+
+    @property
+    def quote_mismatch(self) -> bool:
+        if not self.primary_quote or not self.lines:
+            return False
+        return any(line.quote and line.quote != self.primary_quote for line in self.lines)
 
     @property
     def quote_total(self) -> float:
@@ -114,12 +142,13 @@ class ServiceOpportunity:
 
 @dataclass
 class QuoteGroup:
-    """Quote lines that share an opportunity name and record type."""
+    """Quote lines that share an opportunity id and record type."""
 
     record_type: str
     account: str
     name: str
     owner: str
+    opportunity_id: str
     lines: list[QuoteLine]
     in_services_book: bool = False
 
@@ -163,6 +192,7 @@ class BoatRollup:
     services_value: float
     opportunities: int
     missing_quotes: int
+    unlisted_quotes: int
     shadow_value: float
     outside_value: float
 
@@ -174,6 +204,9 @@ class Scorecard:
     outside_quarter: list[QuoteGroup]
     other: list[QuoteGroup]
     commit_values: list[str]
+    commit_column: bool
+    agreement_types: list[str]
+    currency: str
     boats: list[BoatRollup]
 
     @property
@@ -193,6 +226,10 @@ class Scorecard:
         return sum(1 for row in self.services if row.missing_quote)
 
     @property
+    def unlisted_quotes(self) -> int:
+        return sum(1 for row in self.services if row.unlisted_quote)
+
+    @property
     def shadow_value(self) -> float:
         return sum(row.net_total for row in self.shadow)
 
@@ -206,57 +243,75 @@ def build_scorecard(opps: Table, quotes: Table) -> Scorecard:
     services_lines: dict[str, list[QuoteLine]] = {}
     buckets: dict[tuple[str, str], list[QuoteLine]] = {}
     for line in quote_lines:
-        buckets.setdefault((line.record_type, line.opportunity), []).append(line)
-        if line.record_type == SERVICES_RECORD_TYPE:
-            services_lines.setdefault(line.opportunity, []).append(line)
+        key = line.opportunity_id or f"(no id) {line.line_name}"
+        buckets.setdefault((line.record_type, key), []).append(line)
+        if line.record_type == SERVICES_RECORD_TYPE and line.opportunity_id:
+            services_lines.setdefault(line.opportunity_id, []).append(line)
 
-    name_counts: dict[str, int] = {}
+    id_counts: dict[str, int] = {}
     for row in opps.rows:
-        name = _text(row.get(OPP_NAME))
-        name_counts[name] = name_counts.get(name, 0) + 1
+        opp_id = _text(row.get(OPP_ID))
+        if opp_id:
+            id_counts[opp_id] = id_counts.get(opp_id, 0) + 1
 
     services: list[ServiceOpportunity] = []
-    service_names: set[str] = set()
+    service_ids: set[str] = set()
     for row in opps.rows:
         item = _service_opp(row)
-        item.lines = list(services_lines.get(item.name, []))
-        item.duplicate_name = name_counts[item.name] > 1
+        if item.opportunity_id:
+            item.lines = list(services_lines.get(item.opportunity_id, []))
+            item.duplicate_id = id_counts.get(item.opportunity_id, 0) > 1
+            service_ids.add(item.opportunity_id)
         services.append(item)
-        service_names.add(item.name)
 
     shadow: list[QuoteGroup] = []
     outside: list[QuoteGroup] = []
     other: list[QuoteGroup] = []
-    for (record_type, name), lines in buckets.items():
+    for (record_type, opp_id), lines in buckets.items():
         group = QuoteGroup(
             record_type=record_type,
             account=_first(lines, "account"),
-            name=name,
+            name=_first(lines, "opportunity"),
             owner=_first(lines, "owner"),
+            opportunity_id=opp_id,
             lines=lines,
-            in_services_book=name in service_names,
+            in_services_book=opp_id in service_ids,
         )
         if record_type in SHADOW_RECORD_TYPES:
             shadow.append(group)
-        elif record_type == SERVICES_RECORD_TYPE and name not in service_names:
+        elif record_type == SERVICES_RECORD_TYPE and opp_id not in service_ids:
             outside.append(group)
         elif record_type != SERVICES_RECORD_TYPE:
             other.append(group)
 
-    services.sort(key=lambda row: (row.close or date.max, row.name))
+    services.sort(key=lambda row: (_fiscal_sort(row.fiscal_period), row.close or date.max, row.name))
     shadow.sort(key=lambda row: (-row.net_total, row.name))
     outside.sort(key=lambda row: (row.close or date.max, row.name))
     other.sort(key=lambda row: row.name)
 
-    commits = _unique(_text(row.get(OPP_COMMIT)) for row in opps.rows)
+    commits = _unique(_text(row.get(OPP_COMMIT)) for row in opps.rows) if OPP_COMMIT in opps.headers else []
+    agreements = _unique(row.agreement_type for row in services)
     return Scorecard(
         services=services,
         shadow=shadow,
         outside_quarter=outside,
         other=other,
         commit_values=[value for value in commits if value],
+        commit_column=OPP_COMMIT in opps.headers,
+        agreement_types=agreements,
+        currency=_one_currency(services, quote_lines),
         boats=_boats(services, shadow, outside),
     )
+
+
+_BOAT_NAMES = {
+    "ANZ": "ANZ",
+    "ASEAN": "ASEAN",
+    "JAPAN": "Japan",
+    "KR": "Korea",
+    "INDIA": "India",
+    "HKTM": "HKTM",
+}
 
 
 def boat_label(territory: str) -> str:
@@ -264,8 +319,19 @@ def boat_label(territory: str) -> str:
     text = territory.strip()
     if not text:
         return UNASSIGNED
-    if text.upper().startswith("APJ-"):
-        return text[4:]
+    suffix = text[4:] if text.upper().startswith("APJ-") else text
+    return _BOAT_NAMES.get(suffix.upper(), suffix)
+
+
+def fiscal_label(value: str) -> str:
+    """Q4-2027 and FY2027 Q4 are the same period."""
+    text = value.strip()
+    match = re.fullmatch(r"Q([1-4])-(\d{4})", text)
+    if match:
+        return f"FY{match.group(2)} Q{match.group(1)}"
+    match = re.fullmatch(r"FY(\d{4})\s+Q([1-4])", text, re.IGNORECASE)
+    if match:
+        return f"FY{match.group(1)} Q{match.group(2)}"
     return text
 
 
@@ -279,6 +345,7 @@ def _boats(
         if row.boat not in names:
             names.append(row.boat)
     rollups: list[BoatRollup] = []
+    names.sort(key=lambda name: (name in {UNASSIGNED, "Mixed"}, name))
     for name in names:
         own = [row for row in services if row.boat == name]
         shaded = [row for row in shadow if row.boat == name]
@@ -289,6 +356,7 @@ def _boats(
                 services_value=sum(row.services_value or 0 for row in own),
                 opportunities=len(own),
                 missing_quotes=sum(1 for row in own if row.missing_quote),
+                unlisted_quotes=sum(1 for row in own if row.unlisted_quote),
                 shadow_value=sum(row.net_total for row in shaded),
                 outside_value=sum(row.net_total for row in later),
             )
@@ -303,7 +371,7 @@ def _service_opp(row: dict[str, object]) -> ServiceOpportunity:
         name=_text(row.get(OPP_NAME)),
         owner=_text(row.get(OPP_OWNER)),
         stage=_text(row.get(OPP_STAGE)),
-        fiscal_period=_text(row.get(OPP_FISCAL)),
+        fiscal_period=fiscal_label(_text(row.get(OPP_FISCAL))),
         close=_parse_date(row.get(OPP_CLOSE)),
         close_raw=close_raw,
         amount=_number(row.get(OPP_AMOUNT)),
@@ -315,8 +383,12 @@ def _service_opp(row: dict[str, object]) -> ServiceOpportunity:
         status_date=_text(row.get(OPP_STATUS_DATE)),
         age=_text(row.get(OPP_AGE)),
         commit=_text(row.get(OPP_COMMIT)),
-        recurring=_text(row.get(OPP_RECURRING)),
+        recurring=_yes_no(row.get(OPP_RECURRING)),
         renewal=_yes_no(row.get(OPP_RENEWAL)),
+        opportunity_id=_text(row.get(OPP_ID)),
+        primary_quote=_text(row.get(OPP_PRIMARY)),
+        currency=_text(row.get(OPP_SERVICES_CURRENCY)),
+        agreement_type=_text(row.get(OPP_AGREEMENT)),
     )
 
 
@@ -340,6 +412,9 @@ def _quote_line(row: dict[str, object]) -> QuoteLine:
         territory=_text(row.get(QUOTE_TERRITORY)),
         services_territory=_text(row.get(QUOTE_SERVICES_TERRITORY)),
         opportunity_status=_text(row.get(QUOTE_OPP_STATUS)),
+        opportunity_id=_text(row.get(QUOTE_OPP_ID)),
+        currency=_text(row.get(QUOTE_NET_CURRENCY)),
+        fiscal_period=fiscal_label(_text(row.get(QUOTE_FISCAL))),
     )
 
 
@@ -384,9 +459,9 @@ def _yes_no(value: object) -> str:
     if isinstance(value, bool):
         return "Yes" if value else "No"
     text = _text(value)
-    if text.casefold() in {"true", "yes", "y"}:
+    if text.casefold() in {"true", "yes", "y", "1"}:
         return "Yes"
-    if text.casefold() in {"false", "no", "n"}:
+    if text.casefold() in {"false", "no", "n", "0"}:
         return "No"
     return text
 
@@ -410,13 +485,40 @@ def _number(value: object) -> float | None:
 
 
 def _probability(value: object) -> float | None:
-    """Excel stores 90% as 0.9. A plain 90, or -49.5, in a csv is already points."""
+    """Excel stores 90% as 0.9. A Salesforce csv stores it as 90, or 1 for 1%."""
+    if isinstance(value, str):
+        text = value.strip().replace(",", "")
+        if not text or text in {"-", "—"}:
+            return None
+        if text.endswith("%"):
+            text = text[:-1].strip()
+        try:
+            return float(text) / 100
+        except ValueError:
+            return None
     number = _number(value)
     if number is None:
         return None
     if abs(number) > 1:
         return number / 100
     return number
+
+
+def _fiscal_sort(label: str) -> tuple[int, int, str]:
+    match = re.fullmatch(r"FY(\d{4}) Q([1-4])", label)
+    if match:
+        return (int(match.group(1)), int(match.group(2)), label)
+    return (9999, 9, label)
+
+
+def _one_currency(services: list[ServiceOpportunity], lines: list[QuoteLine]) -> str:
+    codes = _unique(
+        [row.currency for row in services]
+        + [line.currency for line in lines]
+    )
+    if len(codes) == 1:
+        return codes[0]
+    return ""
 
 
 def _parse_date(value: object) -> date | None:
