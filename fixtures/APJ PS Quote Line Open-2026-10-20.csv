@@ -1,0 +1,4 @@
+Opportunity Record Type,Account Name,Opportunity Name,Opportunity Owner,Geo,Primary Quote,Line Name,Product Code,Quantity,Net Total (converted) Currency,Net Total (converted),Total Discount (%),Product Family,Stage,Close Date,Territory,Services Territory,Opportunity ID,Fiscal Period Close
+Direct License,SomeBank,Bank-ISC New,Person1,APJ,Q-000001,QL-000001,PS-ES 40HR BLK,40000,USD,8000,33.333,Professional Services,80-Contracts/Negotiation,10/23/2026,APJ-ASEAN,APAC Asia,006FAKE000000002,FY2027 Q3
+Renewal,SomeCompany,Company-Renewal,Person2,APJ,Q-000002,QL-000002,PS-STAFF-AUG-MED,1,USD,1105018.1059068,-49.584,PS Subscriptions,70-Vendor of Choice,11/6/2026,APJ-ANZ,APAC ANZ,006FAKE000000003,FY2027 Q3
+Services,SomethingSomething,Something-PS Phase 1,Person3,APJ,Q-000003,QL-000003,PS-STAFF-AUG-SM,295,USD,166200,7.667,PS Subscriptions,60-Proposal,12/23/2026,APJ-ASEAN,APAC Asia,006FAKE000000004,FY2027 Q4
