@@ -7,6 +7,9 @@
     stage: "All",
     coverage: "All",
     recordType: "All",
+    account: "All",
+    closeTiming: "All",
+    status: "All",
     q: "",
     sort: "value",
     dir: "desc",
@@ -14,7 +17,7 @@
   };
 
   const params = new URLSearchParams(location.search);
-  ["book", "boat", "fiscal", "stage", "coverage", "recordType", "q", "sort", "dir"].forEach((key) => {
+  ["book", "boat", "fiscal", "stage", "coverage", "recordType", "account", "closeTiming", "status", "q", "sort", "dir"].forEach((key) => {
     if (params.get(key)) state[key] = params.get(key);
   });
 
@@ -32,7 +35,11 @@
     if (skip !== "boat" && state.boat !== "All" && row.boat !== state.boat) return false;
     if (skip !== "fiscal" && state.fiscal !== "All" && row.fiscal !== state.fiscal) return false;
     if (skip !== "stage" && state.stage !== "All" && row.stage !== state.stage) return false;
+    if (skip !== "account" && state.account !== "All" && row.account !== state.account) return false;
+    if (state.closeTiming !== "All" && row.closeTiming !== state.closeTiming) return false;
     if (state.book === "services" && skip !== "coverage" && state.coverage !== "All" && row.coverage !== state.coverage) return false;
+    if (state.book === "services" && state.status === "fresh" && row.statusFresh !== true) return false;
+    if (state.book === "services" && state.status === "stale" && row.statusFresh !== false) return false;
     if (state.book !== "services" && state.recordType !== "All" && row.recordType !== state.recordType) return false;
     if (state.q) {
       const hay = [row.account, row.name, row.owner, row.id, row.primaryQuote, row.statusNote, row.servicesType]
@@ -125,7 +132,10 @@
       const missing = rows.filter((row) => row.coverage === "missing").length;
       const unlisted = rows.filter((row) => row.coverage === "unlisted").length;
       const noun = rows.length === 1 ? "opportunity" : "opportunities";
-      lead.textContent = rows.length + " services " + noun + ", " + money(value) + unit + " services value and " + money(weighted) + unit + " weighted. " + missing + " with no primary quote. " + unlisted + " with a primary quote and no lines in the quote export.";
+      const due = rows.filter((row) => row.closeTiming === "due").length;
+      const soon = rows.filter((row) => row.closeTiming === "soon").length;
+      const stale = rows.filter((row) => row.statusFresh === false).length;
+      lead.textContent = rows.length + " services " + noun + ", " + money(value) + unit + " services value and " + money(weighted) + unit + " weighted. " + missing + " with no primary quote. " + unlisted + " with a primary quote and no lines in the quote export. " + due + " close today or earlier. " + soon + " close in the next " + (data.soonDays || 14) + " days. " + stale + " need a status.";
       return;
     }
     const nouns = {
@@ -147,28 +157,38 @@
       const value = rows.reduce((sum, row) => sum + (Number(row.servicesValue) || 0), 0);
       const weighted = rows.reduce((sum, row) => sum + (Number(row.weighted) || 0), 0);
       cards = [
-        [money(value), "Services value" + unit, "", ""],
-        [money(weighted), "Weighted, as exported" + unit, "", ""],
-        [String(rows.filter((row) => row.coverage === "missing").length), "No primary quote", "flag", "missing"],
-        [String(rows.filter((row) => row.coverage === "unlisted").length), "Quote not in export", "watch", "unlisted"],
+        [money(value), "Services value" + unit, "", "", ""],
+        [money(weighted), "Weighted, as exported" + unit, "", "", ""],
+        [String(rows.filter((row) => row.coverage === "missing").length), "No primary quote", "flag", "coverage", "missing"],
+        [String(rows.filter((row) => row.coverage === "unlisted").length), "Quote not in export", "watch", "coverage", "unlisted"],
       ];
     } else {
       const net = rows.reduce((sum, row) => sum + (Number(row.net) || 0), 0);
       cards = [
-        [money(net), "Net total" + unit, "watch", ""],
-        [String(rows.length), "Deals", "", ""],
-        [String(new Set(rows.map((row) => row.boat)).size), "Boats", "", ""],
-        [String(rows.filter((row) => row.negativeDiscount).length), "Negative discount", "watch", ""],
+        [money(net), "Net total" + unit, "watch", "", ""],
+        [String(rows.length), "Deals", "", "", ""],
+        [String(new Set(rows.map((row) => row.boat)).size), "Boats", "", "", ""],
+        [String(rows.filter((row) => row.negativeDiscount).length), "Negative discount", "watch", "", ""],
       ];
     }
-    cards.forEach(([value, label, kind, coverage]) => {
+    const due = rows.filter((row) => row.closeTiming === "due").length;
+    const soon = rows.filter((row) => row.closeTiming === "soon").length;
+    cards.push(
+      [String(due), "Close today or past", due ? "flag" : "", "closeTiming", "due"],
+      [String(soon), "Close in the next " + (data.soonDays || 14) + " days", soon ? "watch" : "", "closeTiming", "soon"]
+    );
+    if (state.book === "services") {
+      const stale = rows.filter((row) => row.statusFresh === false).length;
+      cards.push([String(stale), "Status overdue", stale ? "flag" : "", "status", "stale"]);
+    }
+    cards.forEach(([value, label, kind, filterKey, filterValue]) => {
       const button = el("button", "stat " + kind);
       button.type = "button";
-      if (coverage && state.coverage === coverage) button.classList.add("active");
+      if (filterKey && state[filterKey] === filterValue) button.classList.add("active");
       button.append(el("b", "", value), el("span", "", label));
-      if (coverage) {
+      if (filterKey) {
         button.addEventListener("click", () => {
-          state.coverage = state.coverage === coverage ? "All" : coverage;
+          state[filterKey] = state[filterKey] === filterValue ? "All" : filterValue;
           state.open = "";
           render();
         });
@@ -220,6 +240,9 @@
         state.stage = "All";
         state.coverage = "All";
         state.recordType = "All";
+        state.account = "All";
+        state.closeTiming = "All";
+        state.status = "All";
         state.open = "";
         state.sort = "value";
         state.dir = "desc";
@@ -248,20 +271,24 @@
     const universe = bookRows();
     select(filters, "All periods", state.fiscal, options(universe.map((row) => row.fiscal)), "fiscal");
     select(filters, "All stages", state.stage, options(universe.map((row) => row.stage).sort()), "stage");
+    const accounts = universe.map((row) => row.account).filter(Boolean).sort((a, b) => a.localeCompare(b));
+    select(filters, "All accounts", state.account, options(accounts), "account");
+    const closeLabels = { due: "Today or past", soon: "Next " + (data.soonDays || 14) + " days" };
+    select(filters, "All close dates", state.closeTiming, ["All", "due", "soon"], "closeTiming");
+    labelOptions(filters, closeLabels);
     if (state.book === "services") {
-      select(filters, "All coverage", state.coverage, ["All", "missing", "unlisted", "linked"].map((item) => item), "coverage");
-      const coverage = filters.querySelector("select:last-of-type");
-      [...coverage.options].forEach((option) => {
-        if (coverageLabel[option.value]) option.textContent = coverageLabel[option.value];
-      });
+      select(filters, "All coverage", state.coverage, ["All", "missing", "unlisted", "linked"], "coverage");
+      labelOptions(filters, coverageLabel);
+      select(filters, "All status", state.status, ["All", "stale", "fresh"], "status");
+      labelOptions(filters, { stale: "Status overdue", fresh: "Status current" });
     } else {
       select(filters, "All record types", state.recordType, options(universe.map((row) => row.recordType)), "recordType");
     }
     const search = document.createElement("input");
     search.type = "search";
-    search.placeholder = "Search account, quote, product";
+    search.placeholder = "Name, account, or quote";
     search.value = state.q;
-    search.setAttribute("aria-label", "Search");
+    search.setAttribute("aria-label", "Opportunity name or account");
     search.addEventListener("input", () => {
       state.q = search.value;
       render();
@@ -269,14 +296,37 @@
     filters.append(search);
   }
 
+  function labelOptions(host, labels) {
+    const control = host.querySelector("select:last-of-type");
+    [...control.options].forEach((option) => {
+      if (labels[option.value]) option.textContent = labels[option.value];
+    });
+  }
+
+  function sortValue(row, key) {
+    if (key === "value") return valueOf(row);
+    if (key === "close") return row.closeIso || null;
+    if (key === "status") return row.statusIso || null;
+    if (key === "weighted") return row.weighted == null ? null : Number(row.weighted);
+    if (key === "coverage") return coverageLabel[row.coverage] || null;
+    const value = row[key];
+    if (value == null || value === "") return null;
+    return value;
+  }
+
   function sortRows(rows) {
     const dir = state.dir === "asc" ? 1 : -1;
     const key = state.sort;
     return rows.slice().sort((a, b) => {
-      const av = key === "value" ? valueOf(a) : key === "close" ? a.closeIso || "" : (a[key] ?? "");
-      const bv = key === "value" ? valueOf(b) : key === "close" ? b.closeIso || "" : (b[key] ?? "");
+      const av = sortValue(a, key);
+      const bv = sortValue(b, key);
+      const aEmpty = av == null || av === "";
+      const bEmpty = bv == null || bv === "";
+      if (aEmpty && bEmpty) return 0;
+      if (aEmpty) return 1;
+      if (bEmpty) return -1;
       if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
-      return String(av).localeCompare(String(bv)) * dir;
+      return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" }) * dir;
     });
   }
 
@@ -284,16 +334,40 @@
     const cell = el("th", numeric ? "num" : "");
     const button = el("button", "", label);
     button.type = "button";
+    if (state.sort === key) {
+      button.textContent = label + (state.dir === "asc" ? " ↑" : " ↓");
+      cell.setAttribute("aria-sort", state.dir === "asc" ? "ascending" : "descending");
+    }
     button.addEventListener("click", () => {
       if (state.sort === key) state.dir = state.dir === "asc" ? "desc" : "asc";
       else {
         state.sort = key;
-        state.dir = typeof bookRows()[0]?.[key] === "number" || key === "value" ? "desc" : "asc";
+        state.dir = key === "value" || key === "weighted" ? "desc" : "asc";
       }
       render();
     });
     cell.append(button);
     table.querySelector("thead tr").append(cell);
+  }
+
+  function closeCell(row) {
+    const wrap = el("td", "when");
+    wrap.textContent = row.close || "—";
+    if (row.closeTiming === "due") wrap.append(el("div", "tag flag", "Today or past"));
+    if (row.closeTiming === "soon") wrap.append(el("div", "tag watch", "Next " + (data.soonDays || 14) + " days"));
+    return wrap;
+  }
+
+  function bandLabel(band) {
+    return { weekly: "Weekly", fortnightly: "Fortnightly", monthly: "Monthly" }[band] || "";
+  }
+
+  function statusCell(row) {
+    const wrap = el("td", "when");
+    wrap.textContent = row.statusDate || "No status date";
+    if (row.statusFresh === false) wrap.append(el("div", "tag flag", "Needs a " + bandLabel(row.statusBand).toLowerCase() + " status"));
+    else if (row.statusBand) wrap.append(el("div", "tag", bandLabel(row.statusBand)));
+    return wrap;
   }
 
   function coverageCell(row) {
@@ -349,24 +423,29 @@
     thead.append(document.createElement("tr"));
     table.append(thead);
     const columns = state.book === "services"
-      ? [["Account", "account"], ["Opportunity", "name"], ["Boat", "boat"], ["Stage", "stage"], ["Close", "close"], ["Fiscal period", "fiscal"], ["Services value", "value", true], ["Weighted", "weighted", true], ["Coverage", "coverage"], ["Owner", "owner"]]
+      ? [["Account", "account"], ["Opportunity", "name"], ["Boat", "boat"], ["Stage", "stage"], ["Close", "close"], ["Status", "status"], ["Fiscal period", "fiscal"], ["Services value", "value", true], ["Weighted", "weighted", true], ["Coverage", "coverage"], ["Owner", "owner"]]
       : [["Record type", "recordType"], ["Account", "account"], ["Opportunity", "name"], ["Boat", "boat"], ["Stage", "stage"], ["Close", "close"], ["Net", "value", true], ["Owner", "owner"]];
     columns.forEach(([label, key, numeric]) => header(table, label, key, numeric));
     const body = document.createElement("tbody");
     sortRows(rows).forEach((row) => {
-      const tr = el("tr", "row" + (row.coverage === "missing" ? " flag" : row.coverage === "unlisted" || row.negativeDiscount ? " watch" : ""));
+      const attention = row.coverage === "missing" || row.closeTiming === "due" || row.statusFresh === false;
+      const watch = row.coverage === "unlisted" || row.closeTiming === "soon" || row.negativeDiscount;
+      const tr = el("tr", "row" + (attention ? " flag" : watch ? " watch" : ""));
       tr.addEventListener("click", () => {
         state.open = state.open === row.id + row.name ? "" : row.id + row.name;
         render();
       });
       if (state.book === "services") {
-        [row.account, row.name, row.boat, row.stage, row.close, row.fiscal].forEach((value, index) => tr.append(el("td", index === 4 ? "when" : "", value || "—")));
+        [row.account, row.name, row.boat, row.stage].forEach((value) => tr.append(el("td", "", value || "—")));
+        tr.append(closeCell(row), statusCell(row));
+        tr.append(el("td", "", row.fiscal || "—"));
         tr.append(el("td", "num", money(row.servicesValue)));
         tr.append(el("td", "num", money(row.weighted)));
         tr.append(coverageCell(row));
         tr.append(el("td", "", row.owner || "—"));
       } else {
-        [row.recordType, row.account, row.name, row.boat, row.stage, row.close].forEach((value) => tr.append(el("td", "", value || "—")));
+        [row.recordType, row.account, row.name, row.boat, row.stage].forEach((value) => tr.append(el("td", "", value || "—")));
+        tr.append(closeCell(row));
         tr.append(el("td", "num", money(row.net)));
         tr.append(el("td", "", row.owner || "—"));
       }
@@ -383,6 +462,7 @@
         if (row.probability != null) bits.push("Probability " + pct(row.probability));
         if (row.age) bits.push("Age " + row.age);
         if (row.statusDate) bits.push("Status date " + row.statusDate);
+        if (row.statusBand) bits.push(bandLabel(row.statusBand) + " status" + (row.statusFresh === false ? ", overdue" : ", current") + (row.statusAge == null ? ", no status date" : ", " + row.statusAge + " days"));
         if (row.primaryQuote) bits.push("Primary quote " + row.primaryQuote);
         if ((row.quotes || []).length) bits.push("Quote " + row.quotes.join(", "));
         if (row.inServicesBook) bits.push("Also in the services book");
@@ -406,7 +486,7 @@
     const rows = selected();
     document.getElementById("asof").textContent = data.asOf;
     renderLead(rows);
-    const stamp = [state.book, state.boat, state.fiscal, state.stage, state.coverage, state.recordType].join("\0");
+    const stamp = [state.book, state.boat, state.fiscal, state.stage, state.coverage, state.recordType, state.account, state.closeTiming, state.status].join("\0");
     if (stamp !== filterStamp) {
       filterStamp = stamp;
       renderFilters();
@@ -419,7 +499,7 @@
     drawBars(document.getElementById("chart-fiscal"), fiscalRows, "fiscal", valueLabel + " by fiscal period");
     renderTable(rows);
     const next = new URLSearchParams();
-    ["book", "boat", "fiscal", "stage", "coverage", "recordType", "q", "sort", "dir"].forEach((key) => {
+    ["book", "boat", "fiscal", "stage", "coverage", "recordType", "account", "closeTiming", "status", "q", "sort", "dir"].forEach((key) => {
       if (state[key] && state[key] !== "All" && !(key === "book" && state[key] === "services") && !(key === "sort" && state[key] === "value") && !(key === "dir" && state[key] === "desc")) {
         next.set(key, state[key]);
       }

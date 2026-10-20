@@ -31,6 +31,7 @@ from psdesk.columns import (
     QUOTE_TERRITORY,
 )
 from psdesk.load import ReportError, load_directory, load_table
+from psdesk.payload import to_payload
 from psdesk.render import render
 from psdesk.scorecard import build_scorecard
 from psdesk.__main__ import main
@@ -201,6 +202,44 @@ def test_missing_column_names_the_file(tmp_path):
     _write_csv(quotes, _quote_header(), [])
     with pytest.raises(ReportError, match="notes.csv"):
         require_reports(load_table(path), load_table(quotes))
+
+
+def test_close_pressure_and_status_cadence():
+    from psdesk.attention import close_timing, status_band, status_fresh
+
+    as_of = date(2026, 10, 20)
+    assert close_timing(as_of, as_of) == "due"
+    assert close_timing(date(2026, 10, 19), as_of) == "due"
+    assert close_timing(date(2026, 10, 21), as_of) == "soon"
+    assert close_timing(date(2026, 11, 3), as_of) == "soon"
+    assert close_timing(date(2026, 11, 4), as_of) == "later"
+    assert close_timing(None, as_of) == ""
+
+    assert status_band(0) == "monthly"
+    assert status_band(50_000) == "monthly"
+    assert status_band(50_000.01) == "fortnightly"
+    assert status_band(100_000) == "fortnightly"
+    assert status_band(100_000.01) == "weekly"
+    assert status_band(-1) == ""
+    assert status_band(None) == ""
+
+    assert status_fresh(10_000, date(2026, 9, 20), as_of) is True
+    assert status_fresh(10_000, date(2026, 9, 19), as_of) is False
+    assert status_fresh(10_000, None, as_of) is False
+    assert status_fresh(75_000, date(2026, 10, 6), as_of) is True
+    assert status_fresh(75_000, date(2026, 10, 5), as_of) is False
+    assert status_fresh(150_000, date(2026, 10, 13), as_of) is True
+    assert status_fresh(150_000, date(2026, 10, 12), as_of) is False
+    assert status_fresh(-5, date(2026, 1, 1), as_of) is None
+
+    card, opps, quotes = _scorecard()
+    payload = to_payload(card, opps, quotes, as_of)
+    service = payload["services"][0]
+    assert service["closeTiming"] == "soon"
+    assert service["statusBand"] == "weekly"
+    assert service["statusAge"] == 6
+    assert service["statusFresh"] is True
+    assert payload["asOfIso"] == "2026-10-20"
 
 
 def test_page_escapes_status_notes_and_shows_the_sample_flag(tmp_path):

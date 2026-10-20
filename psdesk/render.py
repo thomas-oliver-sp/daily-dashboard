@@ -7,6 +7,7 @@ import json
 from datetime import date
 from pathlib import Path
 
+from psdesk.attention import SOON_DAYS
 from psdesk.load import Table
 from psdesk.payload import to_payload
 from psdesk.scorecard import Scorecard
@@ -36,7 +37,7 @@ def render(scorecard: Scorecard, opps: Table, quotes: Table, as_of: date | None)
 <p class="kicker">APJ professional services</p>
 <h1>Opportunities</h1>
 <p class="asof" id="asof">{esc(title)}</p>
-<p class="lead" id="lead">{esc(_lead(scorecard))}</p>
+<p class="lead" id="lead">{esc(_lead(scorecard, payload))}</p>
 <p class="sources">{esc(payload["sources"])}</p>
 <div class="books" id="books"></div>
 <div class="boats" id="boats"></div>
@@ -64,13 +65,17 @@ def render(scorecard: Scorecard, opps: Table, quotes: Table, as_of: date | None)
 """
 
 
-def _lead(scorecard: Scorecard) -> str:
+def _lead(scorecard: Scorecard, payload: dict) -> str:
     count = len(scorecard.services)
     noun = "opportunity" if count == 1 else "opportunities"
     missing = scorecard.missing_quotes
     missing_verb = "has" if missing == 1 else "have"
     unlisted = scorecard.unlisted_quotes
     unlisted_verb = "has" if unlisted == 1 else "have"
+    services = payload["services"]
+    due = sum(1 for row in services if row["closeTiming"] == "due")
+    soon = sum(1 for row in services if row["closeTiming"] == "soon")
+    stale = sum(1 for row in services if row["statusFresh"] is False)
     periods = len(scorecard.fiscal_periods)
     period_bit = f" Across {periods} fiscal {'period' if periods == 1 else 'periods'}." if periods else ""
     return (
@@ -79,6 +84,9 @@ def _lead(scorecard: Scorecard) -> str:
         f"and {_money(scorecard.weighted)} weighted. "
         f"{missing} {missing_verb} no primary quote. "
         f"{unlisted} {unlisted_verb} a primary quote with no lines in the quote-line export. "
+        f"{due} close today or earlier. "
+        f"{soon} close in the next {payload['soonDays']} days. "
+        f"{stale} need a status. "
         f"License and renewal quotes carry {_money(scorecard.shadow_value)} of PS.{period_bit}"
     )
 
@@ -102,7 +110,12 @@ def _money_note(scorecard: Scorecard) -> str:
 
 
 def _extra_notes(scorecard: Scorecard) -> str:
-    notes = []
+    notes = [
+        "Close dates use the report date. A close on that date or earlier is due. "
+        f"A close in the next {SOON_DAYS} days is coming up. "
+        "On this services book, status is weekly above 100,000, fortnightly above 50,000 through 100,000, "
+        "and monthly from 0 through 50,000. A missing status date counts as overdue."
+    ]
     if scorecard.commit_column:
         if scorecard.commit_values:
             listed = ", ".join(scorecard.commit_values)

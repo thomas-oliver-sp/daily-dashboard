@@ -30,7 +30,9 @@ python -m psdesk build --opps closing.xlsx --quotes quote-lines.xlsx -o dist/ind
 
 `python -m psdesk serve path/to/exports` serves that page at `http://127.0.0.1:8765/index.html`.
 
-The page is a local dashboard. Switch between the services book, license and renewal quotes, and services quotes that are not in the closing file. Filter by boat, fiscal period, stage, and quote coverage, or search account, quote, and product. Click a bar or a coverage count to cut the table. Click a row to see its quote lines. The address bar keeps the current cut, so a link reopens the same view. The page does not call out to a network.
+The page is a local dashboard. Switch between the services book, license and renewal quotes, and services quotes that are not in the closing file. Filter by boat, fiscal period, stage, quote coverage, and account, or search opportunity name and account. Click a column heading to sort. Click a bar or a count to cut the table. Click a row to see its quote lines. The address bar keeps the current cut, so a link reopens the same view. The page does not call out to a network.
+
+Close dates are compared with the report date. Today or earlier is due. The next 14 days are coming up. On the services book only, a status is expected weekly above 100,000, fortnightly above 50,000 through 100,000, and monthly from 0 through 50,000. No status date counts as overdue.
 
 `fixtures/` holds the sanitized 20 Oct 2026 sample. `python -m pytest` checks the flags against it.
 

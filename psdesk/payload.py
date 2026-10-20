@@ -5,30 +5,36 @@ from __future__ import annotations
 import re
 from datetime import date
 
+from psdesk.attention import SOON_DAYS, close_timing, status_age, status_band, status_fresh, status_limit
 from psdesk.load import Table
-from psdesk.scorecard import QuoteGroup, QuoteLine, Scorecard, ServiceOpportunity
+from psdesk.scorecard import QuoteGroup, QuoteLine, Scorecard, ServiceOpportunity, _parse_date
 
 
 def to_payload(scorecard: Scorecard, opps: Table, quotes: Table, as_of: date | None) -> dict:
+    clock = _report_date(opps, quotes, as_of)
     return {
-        "asOf": _as_of_label(opps, quotes, as_of),
+        "asOf": _as_of_label(clock),
+        "asOfIso": clock.isoformat(),
+        "soonDays": SOON_DAYS,
         "currency": scorecard.currency,
         "sources": _sources(opps, quotes),
         "agreement": scorecard.agreement_types[0] if len(scorecard.agreement_types) == 1 else "",
-        "services": [_service(row) for row in scorecard.services],
-        "shadow": [_group(row) for row in scorecard.shadow],
-        "outside": [_group(row) for row in scorecard.outside_quarter],
-        "other": [_group(row) for row in scorecard.other],
+        "services": [_service(row, clock) for row in scorecard.services],
+        "shadow": [_group(row, clock) for row in scorecard.shadow],
+        "outside": [_group(row, clock) for row in scorecard.outside_quarter],
+        "other": [_group(row, clock) for row in scorecard.other],
     }
 
 
-def _service(row: ServiceOpportunity) -> dict:
+def _service(row: ServiceOpportunity, as_of: date) -> dict:
     if row.missing_quote:
         coverage = "missing"
     elif row.unlisted_quote:
         coverage = "unlisted"
     else:
         coverage = "linked"
+    status = _parse_date(row.status_date)
+    band = status_band(row.services_value)
     return {
         "id": row.opportunity_id,
         "account": row.account,
@@ -39,12 +45,18 @@ def _service(row: ServiceOpportunity) -> dict:
         "fiscal": row.fiscal_period,
         "close": _close(row.close, row.close_raw),
         "closeIso": row.close.isoformat() if row.close else "",
+        "closeTiming": close_timing(row.close, as_of),
         "servicesValue": row.services_value,
         "weighted": row.weighted,
         "probability": row.probability,
         "servicesType": row.services_type,
         "statusNote": row.status_note,
-        "statusDate": row.status_date,
+        "statusDate": _close(status, row.status_date),
+        "statusIso": status.isoformat() if status else "",
+        "statusAge": status_age(status, as_of),
+        "statusBand": band,
+        "statusLimit": status_limit(band),
+        "statusFresh": status_fresh(row.services_value, status, as_of),
         "age": row.age,
         "primaryQuote": row.primary_quote,
         "quoteTotal": row.quote_total,
@@ -55,7 +67,7 @@ def _service(row: ServiceOpportunity) -> dict:
     }
 
 
-def _group(row: QuoteGroup) -> dict:
+def _group(row: QuoteGroup, as_of: date) -> dict:
     fiscals = []
     for line in row.lines:
         if line.fiscal_period and line.fiscal_period not in fiscals:
@@ -71,6 +83,7 @@ def _group(row: QuoteGroup) -> dict:
         "fiscal": fiscals[0] if len(fiscals) == 1 else ", ".join(fiscals),
         "close": _close(row.close, row.close_raw),
         "closeIso": row.close.isoformat() if row.close else "",
+        "closeTiming": close_timing(row.close, as_of),
         "net": row.net_total,
         "quotes": row.quotes,
         "inServicesBook": row.in_services_book,
@@ -106,14 +119,18 @@ def _sources(opps: Table, quotes: Table) -> str:
     )
 
 
-def _as_of_label(opps: Table, quotes: Table, as_of: date | None) -> str:
+def _report_date(opps: Table, quotes: Table, as_of: date | None) -> date:
     if as_of is not None:
-        return f"{as_of.day} {as_of.strftime('%b %Y')}"
+        return as_of
     for table in (opps, quotes):
         found = _date_in_name(table.path.name)
         if found:
-            return f"{found.day} {found.strftime('%b %Y')}"
-    return "Undated export"
+            return found
+    return date.today()
+
+
+def _as_of_label(clock: date) -> str:
+    return f"{clock.day} {clock.strftime('%b %Y')}"
 
 
 def _date_in_name(name: str) -> date | None:
